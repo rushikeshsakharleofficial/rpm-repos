@@ -22,13 +22,17 @@ jobs:
 
       - name: Generate repository metadata
         run: |
-          cd packages
-          createrepo_c --update .
+          for arch in packages/*/; do
+            if [ -d "$arch" ] && [ "$(basename $arch)" != "repodata" ]; then
+              echo "Updating repo for $arch"
+              createrepo_c --update "$arch"
+            fi
+          done
 
       - name: Commit and push changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/repodata
+          git add packages/*/repodata
           git diff --staged --quiet || git commit -m "Update repository metadata [skip ci]"
           git push
