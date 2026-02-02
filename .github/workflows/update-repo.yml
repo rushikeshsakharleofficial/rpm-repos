@@ -29,10 +29,58 @@ jobs:
             fi
           done
 
+      - name: Generate index.html files
+        run: |
+          generate_index() {
+            local dir="$1"
+            local url_path="$2"
+            local index_file="$dir/index.html"
+
+            echo '<!DOCTYPE html>' > "$index_file"
+            echo '<html><head><title>Index of '"$url_path"'</title>' >> "$index_file"
+            echo '<style>body{font-family:monospace;background:#fff;color:#000;margin:20px}' >> "$index_file"
+            echo 'h1{font-size:1.2em}hr{border:none;border-top:1px solid #ccc}' >> "$index_file"
+            echo 'table{border-collapse:collapse}th,td{text-align:left;padding:4px 15px 4px 0}' >> "$index_file"
+            echo 'a{color:#0000ee;text-decoration:none}a:hover{text-decoration:underline}' >> "$index_file"
+            echo '.size{color:#666}</style></head><body>' >> "$index_file"
+            echo '<h1>Index of '"$url_path"'</h1><hr><table>' >> "$index_file"
+            echo '<tr><th>Name</th><th>Size</th></tr>' >> "$index_file"
+
+            # Parent directory link
+            if [ "$url_path" != "/" ]; then
+              echo '<tr><td><a href="../">../</a></td><td class="size">-</td></tr>' >> "$index_file"
+            fi
+
+            # List directories first
+            for item in "$dir"*/; do
+              if [ -d "$item" ]; then
+                name=$(basename "$item")
+                echo '<tr><td><a href="'"$name"'/">'"$name"'/</a></td><td class="size">-</td></tr>' >> "$index_file"
+              fi
+            done
+
+            # List files
+            for item in "$dir"*; do
+              if [ -f "$item" ] && [ "$(basename "$item")" != "index.html" ]; then
+                name=$(basename "$item")
+                size=$(du -h "$item" | cut -f1)
+                echo '<tr><td><a href="'"$name"'">'"$name"'</a></td><td class="size">'"$size"'</td></tr>' >> "$index_file"
+              fi
+            done
+
+            echo '</table><hr></body></html>' >> "$index_file"
+          }
+
+          # Generate for packages and all subdirectories
+          find packages -type d | while read dir; do
+            url_path="/${dir}"
+            generate_index "$dir/" "$url_path"
+          done
+
       - name: Commit and push changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/*/repodata
-          git diff --staged --quiet || git commit -m "Update repository metadata [skip ci]"
+          git add packages/
+          git diff --staged --quiet || git commit -m "Update repository metadata and indexes [skip ci]"
           git push
