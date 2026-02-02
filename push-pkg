@@ -7,7 +7,6 @@ set -e
 # Check dependencies
 command -v createrepo_c >/dev/null || { echo "❌ Install: sudo apt install createrepo-c"; exit 1; }
 command -v dpkg-scanpackages >/dev/null || { echo "❌ Install: sudo apt install dpkg-dev"; exit 1; }
-command -v rpm >/dev/null || { echo "❌ Install: sudo apt install rpm"; exit 1; }
 
 PKG="$1"
 RPM_REPO="$HOME/rpm-repos"
@@ -46,16 +45,62 @@ EOF
 
 regenerate_all_indexes() {
     local base="$1"
-    find "$base" -type d | while read d; do
+    find "$base" -type d | sort | while read d; do
         local url_path="/${d#./}"
         generate_index "$d/" "$url_path"
     done
 }
 
+get_rpm_arch() {
+    local pkg="$1"
+    local filename=$(basename "$pkg")
+
+    # Try rpm command first
+    if command -v rpm >/dev/null 2>&1; then
+        local arch=$(rpm -qp --qf '%{ARCH}' "$pkg" 2>/dev/null)
+        if [ -n "$arch" ] && [ "$arch" != "(none)" ]; then
+            echo "$arch"
+            return
+        fi
+    fi
+
+    # Fallback: extract from filename (package-version-release.ARCH.rpm)
+    if [[ "$filename" =~ \.x86_64\.rpm$ ]]; then
+        echo "x86_64"
+    elif [[ "$filename" =~ \.aarch64\.rpm$ ]]; then
+        echo "aarch64"
+    elif [[ "$filename" =~ \.arm64\.rpm$ ]]; then
+        echo "aarch64"
+    elif [[ "$filename" =~ \.noarch\.rpm$ ]]; then
+        echo "noarch"
+    elif [[ "$filename" =~ \.i686\.rpm$ ]]; then
+        echo "i686"
+    else
+        echo "x86_64"  # default
+    fi
+}
+
+get_rpm_name() {
+    local pkg="$1"
+    local filename=$(basename "$pkg")
+
+    # Try rpm command first
+    if command -v rpm >/dev/null 2>&1; then
+        local name=$(rpm -qp --qf '%{NAME}' "$pkg" 2>/dev/null)
+        if [ -n "$name" ] && [ "$name" != "(none)" ]; then
+            echo "$name"
+            return
+        fi
+    fi
+
+    # Fallback: extract from filename (NAME-version-release.arch.rpm)
+    echo "$filename" | sed -E 's/-[0-9]+\.[0-9]+.*$//'
+}
+
 push_rpm() {
     local pkg="$1"
-    local name=$(rpm -qp --qf '%{NAME}' "$pkg" 2>/dev/null)
-    local arch=$(rpm -qp --qf '%{ARCH}' "$pkg" 2>/dev/null)
+    local name=$(get_rpm_name "$pkg")
+    local arch=$(get_rpm_arch "$pkg")
     local letter="${name:0:1}"
     local dest="$RPM_REPO/packages/$arch/$letter"
 
@@ -73,7 +118,7 @@ push_rpm() {
 
     echo "📤 Pushing to GitHub..."
     git add packages/
-    git commit -m "Add $PKG_NAME"
+    git commit -m "Add $PKG_NAME" || echo "No changes to commit"
     git push
 
     echo "✅ Done! Package available at:"
@@ -82,8 +127,8 @@ push_rpm() {
 
 push_deb() {
     local pkg="$1"
-    local name=$(dpkg-deb -f "$pkg" Package)
-    local arch=$(dpkg-deb -f "$pkg" Architecture)
+    local name=$(dpkg-deb -f "$pkg" Package 2>/dev/null || basename "$pkg" | sed 's/_.*$//')
+    local arch=$(dpkg-deb -f "$pkg" Architecture 2>/dev/null || echo "amd64")
     local letter="${name:0:1}"
     local dest="$DEB_REPO/pool/main/$letter"
 
@@ -95,9 +140,9 @@ push_deb() {
     echo "🔄 Updating repo metadata..."
     cd "$DEB_REPO"
 
-    dpkg-scanpackages --arch amd64 pool/ > dists/stable/main/binary-amd64/Packages
+    dpkg-scanpackages --arch amd64 pool/ > dists/stable/main/binary-amd64/Packages 2>/dev/null
     gzip -k -f dists/stable/main/binary-amd64/Packages
-    dpkg-scanpackages --arch arm64 pool/ > dists/stable/main/binary-arm64/Packages
+    dpkg-scanpackages --arch arm64 pool/ > dists/stable/main/binary-arm64/Packages 2>/dev/null
     gzip -k -f dists/stable/main/binary-arm64/Packages
 
     cd dists/stable
@@ -122,7 +167,7 @@ EOF
 
     echo "📤 Pushing to GitHub..."
     git add .
-    git commit -m "Add $PKG_NAME"
+    git commit -m "Add $PKG_NAME" || echo "No changes to commit"
     git push
 
     echo "✅ Done! Package available at:"
