@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Linux Hardened RPM Repository</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        h1 { color: #00d9ff; }
+        code {
+            background: #16213e;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        pre {
+            background: #16213e;
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        a { color: #00d9ff; }
+    </style>
+</head>
+<body>
+    <h1>Linux Hardened RPM Repository</h1>
+
+    <h2>Quick Setup</h2>
+    <pre><code>sudo curl -o /etc/yum.repos.d/linuxhardened.repo https://rpm.linuxhardened.com/linuxhardened.repo</code></pre>
+
+    <h2>Install Packages</h2>
+    <pre><code>sudo dnf install &lt;package-name&gt;</code></pre>
+
+    <h2>Repository Configuration</h2>
+    <pre><code>[linuxhardened]
+name=Linux Hardened RPM Repository
+baseurl=https://rpm.linuxhardened.com/packages
+enabled=1
+gpgcheck=0</code></pre>
+
+    <p><a href="https://github.com/rushikeshsakharleofficial/rpm-repos">View on GitHub</a></p>
+</body>
+</html>

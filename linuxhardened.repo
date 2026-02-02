@@ -1,0 +1,5 @@
+[linuxhardened]
+name=Linux Hardened RPM Repository
+baseurl=https://rpm.linuxhardened.com/packages
+enabled=1
+gpgcheck=0
