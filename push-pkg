@@ -1,0 +1,136 @@
+#!/bin/bash
+# One-click package push to Linux Hardened repos
+# Usage: push-pkg <package.rpm|package.deb>
+
+set -e
+
+# Check dependencies
+command -v createrepo_c >/dev/null || { echo "❌ Install: sudo apt install createrepo-c"; exit 1; }
+command -v dpkg-scanpackages >/dev/null || { echo "❌ Install: sudo apt install dpkg-dev"; exit 1; }
+command -v rpm >/dev/null || { echo "❌ Install: sudo apt install rpm"; exit 1; }
+
+PKG="$1"
+RPM_REPO="$HOME/rpm-repos"
+DEB_REPO="$HOME/deb-repos"
+
+if [ -z "$PKG" ] || [ ! -f "$PKG" ]; then
+    echo "Usage: push-pkg <package.rpm|package.deb>"
+    exit 1
+fi
+
+PKG_NAME=$(basename "$PKG")
+EXT="${PKG_NAME##*.}"
+
+generate_index() {
+    local dir="$1" url_path="$2"
+    cat > "${dir}index.html" << EOF
+<!DOCTYPE html>
+<html><head><title>Index of $url_path</title>
+<style>body{font-family:monospace;background:#fff;color:#000;margin:20px}
+h1{font-size:1.2em}hr{border:none;border-top:1px solid #ccc}
+table{border-collapse:collapse}th,td{text-align:left;padding:4px 15px 4px 0}
+a{color:#0000ee}a:hover{text-decoration:underline}.size{color:#666}</style></head>
+<body><h1>Index of $url_path</h1><hr><table>
+<tr><th>Name</th><th>Size</th></tr>
+<tr><td><a href="../">../</a></td><td class="size">-</td></tr>
+EOF
+    for item in "$dir"*/; do
+        [ -d "$item" ] && echo "<tr><td><a href=\"$(basename "$item")/\">$(basename "$item")/</a></td><td class=\"size\">-</td></tr>" >> "${dir}index.html"
+    done
+    for item in "$dir"*; do
+        [ -f "$item" ] && [ "$(basename "$item")" != "index.html" ] && \
+        echo "<tr><td><a href=\"$(basename "$item")\">$(basename "$item")</a></td><td class=\"size\">$(du -h "$item"|cut -f1)</td></tr>" >> "${dir}index.html"
+    done
+    echo '</table><hr></body></html>' >> "${dir}index.html"
+}
+
+regenerate_all_indexes() {
+    local base="$1"
+    find "$base" -type d | while read d; do
+        local url_path="/${d#./}"
+        generate_index "$d/" "$url_path"
+    done
+}
+
+push_rpm() {
+    local pkg="$1"
+    local name=$(rpm -qp --qf '%{NAME}' "$pkg" 2>/dev/null)
+    local arch=$(rpm -qp --qf '%{ARCH}' "$pkg" 2>/dev/null)
+    local letter="${name:0:1}"
+    local dest="$RPM_REPO/packages/$arch/$letter"
+
+    echo "📦 Package: $name ($arch)"
+
+    mkdir -p "$dest"
+    cp "$pkg" "$dest/"
+
+    echo "🔄 Updating repo metadata..."
+    cd "$RPM_REPO"
+    createrepo_c --update "packages/$arch"
+
+    echo "🔄 Regenerating indexes..."
+    regenerate_all_indexes "packages"
+
+    echo "📤 Pushing to GitHub..."
+    git add packages/
+    git commit -m "Add $PKG_NAME"
+    git push
+
+    echo "✅ Done! Package available at:"
+    echo "   https://rpm.linuxhardened.com/packages/$arch/$letter/$PKG_NAME"
+}
+
+push_deb() {
+    local pkg="$1"
+    local name=$(dpkg-deb -f "$pkg" Package)
+    local arch=$(dpkg-deb -f "$pkg" Architecture)
+    local letter="${name:0:1}"
+    local dest="$DEB_REPO/pool/main/$letter"
+
+    echo "📦 Package: $name ($arch)"
+
+    mkdir -p "$dest"
+    cp "$pkg" "$dest/"
+
+    echo "🔄 Updating repo metadata..."
+    cd "$DEB_REPO"
+
+    dpkg-scanpackages --arch amd64 pool/ > dists/stable/main/binary-amd64/Packages
+    gzip -k -f dists/stable/main/binary-amd64/Packages
+    dpkg-scanpackages --arch arm64 pool/ > dists/stable/main/binary-arm64/Packages
+    gzip -k -f dists/stable/main/binary-arm64/Packages
+
+    cd dists/stable
+    cat > Release << EOF
+Origin: Linux Hardened
+Label: Linux Hardened
+Suite: stable
+Codename: stable
+Architectures: amd64 arm64
+Components: main
+Description: Linux Hardened DEB Repository
+EOF
+    echo "SHA256:" >> Release
+    for f in main/binary-*/Packages*; do
+        echo " $(sha256sum $f | cut -d' ' -f1) $(wc -c < $f) $f" >> Release
+    done
+    cd "$DEB_REPO"
+
+    echo "🔄 Regenerating indexes..."
+    regenerate_all_indexes "pool"
+    regenerate_all_indexes "dists"
+
+    echo "📤 Pushing to GitHub..."
+    git add .
+    git commit -m "Add $PKG_NAME"
+    git push
+
+    echo "✅ Done! Package available at:"
+    echo "   https://deb.linuxhardened.com/pool/main/$letter/$PKG_NAME"
+}
+
+case "$EXT" in
+    rpm) push_rpm "$PKG" ;;
+    deb) push_deb "$PKG" ;;
+    *) echo "❌ Unknown type: $EXT (use .rpm or .deb)"; exit 1 ;;
+esac
