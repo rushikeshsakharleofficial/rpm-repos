@@ -1,16 +1,14 @@
 #!/bin/bash
 # One-click package push to Linux Hardened repos
 # Usage: push-pkg <package.rpm|package.deb>
+# Works from any machine - auto-clones repos if needed
 
 set -e
-
-# Check dependencies
-command -v createrepo_c >/dev/null || { echo "❌ Install: sudo apt install createrepo-c"; exit 1; }
-command -v dpkg-scanpackages >/dev/null || { echo "❌ Install: sudo apt install dpkg-dev"; exit 1; }
 
 PKG="$1"
 RPM_REPO="$HOME/rpm-repos"
 DEB_REPO="$HOME/deb-repos"
+GH_USER="rushikeshsakharleofficial"
 
 if [ -z "$PKG" ] || [ ! -f "$PKG" ]; then
     echo "Usage: push-pkg <package.rpm|package.deb>"
@@ -19,6 +17,28 @@ fi
 
 PKG_NAME=$(basename "$PKG")
 EXT="${PKG_NAME##*.}"
+
+# Check dependencies based on package type
+check_deps() {
+    if [ "$EXT" = "rpm" ]; then
+        command -v createrepo_c >/dev/null || { echo "❌ Install: sudo apt install createrepo-c"; exit 1; }
+    elif [ "$EXT" = "deb" ]; then
+        command -v dpkg-scanpackages >/dev/null || { echo "❌ Install: sudo apt install dpkg-dev"; exit 1; }
+    fi
+    command -v git >/dev/null || { echo "❌ Install: sudo apt install git"; exit 1; }
+}
+
+# Clone repos if not present
+ensure_repos() {
+    if [ "$EXT" = "rpm" ] && [ ! -d "$RPM_REPO/.git" ]; then
+        echo "📥 Cloning rpm-repos..."
+        git clone "https://github.com/$GH_USER/rpm-repos.git" "$RPM_REPO"
+    fi
+    if [ "$EXT" = "deb" ] && [ ! -d "$DEB_REPO/.git" ]; then
+        echo "📥 Cloning deb-repos..."
+        git clone "https://github.com/$GH_USER/deb-repos.git" "$DEB_REPO"
+    fi
+}
 
 generate_index() {
     local dir="$1" url_path="$2"
@@ -64,7 +84,7 @@ get_rpm_arch() {
         fi
     fi
 
-    # Fallback: extract from filename (package-version-release.ARCH.rpm)
+    # Fallback: extract from filename
     if [[ "$filename" =~ \.x86_64\.rpm$ ]]; then
         echo "x86_64"
     elif [[ "$filename" =~ \.aarch64\.rpm$ ]]; then
@@ -76,7 +96,7 @@ get_rpm_arch() {
     elif [[ "$filename" =~ \.i686\.rpm$ ]]; then
         echo "i686"
     else
-        echo "x86_64"  # default
+        echo "x86_64"
     fi
 }
 
@@ -97,6 +117,21 @@ get_rpm_name() {
     echo "$filename" | sed -E 's/-[0-9]+\.[0-9]+.*$//'
 }
 
+get_deb_field() {
+    local pkg="$1" field="$2" fallback="$3"
+    local value=""
+
+    if command -v dpkg-deb >/dev/null 2>&1; then
+        value=$(dpkg-deb -f "$pkg" "$field" 2>/dev/null)
+    fi
+
+    if [ -z "$value" ]; then
+        echo "$fallback"
+    else
+        echo "$value"
+    fi
+}
+
 push_rpm() {
     local pkg="$1"
     local name=$(get_rpm_name "$pkg")
@@ -111,6 +146,10 @@ push_rpm() {
 
     echo "🔄 Updating repo metadata..."
     cd "$RPM_REPO"
+
+    # Pull latest changes first
+    git pull --rebase 2>/dev/null || true
+
     createrepo_c --update "packages/$arch"
 
     echo "🔄 Regenerating indexes..."
@@ -127,8 +166,9 @@ push_rpm() {
 
 push_deb() {
     local pkg="$1"
-    local name=$(dpkg-deb -f "$pkg" Package 2>/dev/null || basename "$pkg" | sed 's/_.*$//')
-    local arch=$(dpkg-deb -f "$pkg" Architecture 2>/dev/null || echo "amd64")
+    local filename=$(basename "$pkg")
+    local name=$(get_deb_field "$pkg" "Package" "$(echo "$filename" | sed 's/_.*$//')")
+    local arch=$(get_deb_field "$pkg" "Architecture" "amd64")
     local letter="${name:0:1}"
     local dest="$DEB_REPO/pool/main/$letter"
 
@@ -139,6 +179,9 @@ push_deb() {
 
     echo "🔄 Updating repo metadata..."
     cd "$DEB_REPO"
+
+    # Pull latest changes first
+    git pull --rebase 2>/dev/null || true
 
     dpkg-scanpackages --arch amd64 pool/ > dists/stable/main/binary-amd64/Packages 2>/dev/null
     gzip -k -f dists/stable/main/binary-amd64/Packages
@@ -173,6 +216,10 @@ EOF
     echo "✅ Done! Package available at:"
     echo "   https://deb.linuxhardened.com/pool/main/$letter/$PKG_NAME"
 }
+
+# Main
+check_deps
+ensure_repos
 
 case "$EXT" in
     rpm) push_rpm "$PKG" ;;
